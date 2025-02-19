@@ -1,0 +1,2 @@
+# Frontend_ServiceDelivery_DS_Manager_build
+Build files for submodule Frontend_ServiceDelivery_DS_Manager
