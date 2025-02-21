@@ -14,18 +14,23 @@ export default {
       nextAdUrl: "",
       isFetching: false,
       offlineRefreshInterval: null,
-      cacheName: 'video-cache' // 🔥 Add a cache name
+      cacheName: 'video-cache' // Name for your Cache Storage
     };
   },
   mounted() {
-    // Retrieve UID from cookie; if absent, redirect to /serve_ad/register_device.
+    // 1️⃣ Clean up any expired ads (older than 30 days) on component load
+    this.cleanExpiredCache()
+      .then(() => this.enforceMaxCacheSize()) // Also enforce 2GB limit
+      .catch(err => console.error('Cleanup error on mount:', err));
+
+    // 2️⃣ Retrieve UID from cookie; if absent, redirect to /serve_ad/register_device
     this.uid = this.getCookie("uid");
     if (!this.uid) {
       window.location.href = '/serve_ad/register_device';
       return;
     }
 
-    // Fetch and play the initial advertisement, then prefetch the next.
+    // 3️⃣ Fetch and play the initial advertisement, then prefetch the next
     this.fetchAd().then(url => {
       if (url) {
         this.currentAdUrl = url;
@@ -34,12 +39,12 @@ export default {
       }
     });
 
-    // Video event listeners.
+    // 4️⃣ Video event listeners
     const video = this.$refs.videoElement;
     video.addEventListener('ended', this.onVideoEnded);
     video.addEventListener('loadedmetadata', this.onLoadedMetadata);
 
-    // Focus reporting.
+    // 5️⃣ Focus reporting
     window.addEventListener('focus', () => {
       this.reportFocus(true);
     });
@@ -47,7 +52,7 @@ export default {
       this.reportFocus(false);
     });
 
-    // Refresh when offline and video is not playing.
+    // 6️⃣ If offline & video is not playing, refresh page every 10 seconds
     this.offlineRefreshInterval = setInterval(() => {
       const videoEl = this.$refs.videoElement;
       if (!navigator.onLine && videoEl.paused) {
@@ -57,12 +62,20 @@ export default {
     }, 10000);
   },
   beforeDestroy() {
+    // Remove video event listeners
     const video = this.$refs.videoElement;
     video.removeEventListener('ended', this.onVideoEnded);
     video.removeEventListener('loadedmetadata', this.onLoadedMetadata);
-    window.removeEventListener('focus', () => this.reportFocus(true));
-    window.removeEventListener('blur', () => this.reportFocus(false));
 
+    // Remove focus/blur event listeners
+    window.removeEventListener('focus', () => {
+      this.reportFocus(true);
+    });
+    window.removeEventListener('blur', () => {
+      this.reportFocus(false);
+    });
+
+    // Clear the offline refresh interval
     if (this.offlineRefreshInterval) {
       clearInterval(this.offlineRefreshInterval);
     }
@@ -82,7 +95,8 @@ export default {
     },
 
     /**
-     * Fetch an advertisement, checking the cache first.
+     * Fetch an advertisement from the server.
+     * Returns a Blob URL if cached, otherwise the original URL.
      */
     async fetchAd() {
       const url = 'https://ds.manager.indigoingenium.ba/get_ad';
@@ -102,10 +116,11 @@ export default {
         } else if (data.name === 'Advertisement') {
           const videoUrl = data.url;
 
-          // 🔥 Check and cache the ad
+          // Cache the ad and return a Blob URL if successful
           const cachedUrl = await this.cacheAd(videoUrl);
           return cachedUrl;
         }
+        return null;
       } catch (error) {
         console.error('Error fetching ad:', error);
         return null;
@@ -113,7 +128,8 @@ export default {
     },
 
     /**
-     * Cache the advertisement video and return the cached URL.
+     * Cache the video, set a 30-day expiration timestamp, and enforce a 2GB size limit.
+     * Returns a local Blob URL if successful, or the original URL if caching fails.
      */
     async cacheAd(videoUrl) {
       if (!('caches' in window)) {
@@ -125,25 +141,136 @@ export default {
         const cache = await caches.open(this.cacheName);
         const cachedResponse = await cache.match(videoUrl);
 
+        // Check if we already have a cached version
         if (cachedResponse) {
-          console.log('Loaded video from cache:', videoUrl);
-          const videoBlob = await cachedResponse.blob();
-          return URL.createObjectURL(videoBlob);
-        } else {
-          const response = await fetch(videoUrl, { mode: 'cors' });
-          if (response.ok) {
-            await cache.put(videoUrl, response.clone());
-            console.log('Video cached:', videoUrl);
-            const videoBlob = await response.blob();
+          // Check expiration
+          const isExpired = this.isCacheExpired(videoUrl);
+          if (!isExpired) {
+            console.log('Loaded video from cache:', videoUrl);
+            const videoBlob = await cachedResponse.blob();
             return URL.createObjectURL(videoBlob);
           } else {
-            console.warn('Failed to fetch and cache video.');
-            return videoUrl;
+            // Remove expired entry
+            console.log('Cache expired, removing:', videoUrl);
+            await cache.delete(videoUrl);
+            localStorage.removeItem(`cache-timestamp-${videoUrl}`);
           }
         }
+
+        // Fetch fresh video if not cached or expired
+        const response = await fetch(videoUrl, { mode: 'cors' });
+        if (!response.ok) {
+          console.warn('Failed to fetch and cache video.');
+          return videoUrl;
+        }
+
+        await cache.put(videoUrl, response.clone());
+        console.log('Video cached:', videoUrl);
+
+        // Store creation timestamp for 30-day expiration
+        localStorage.setItem(`cache-timestamp-${videoUrl}`, Date.now().toString());
+
+        // Enforce 2GB limit
+        await this.enforceMaxCacheSize();
+
+        const videoBlob = await response.blob();
+        return URL.createObjectURL(videoBlob);
       } catch (err) {
         console.error('Cache error:', err);
         return videoUrl;
+      }
+    },
+
+    /**
+     * Check if the cached video is older than 30 days.
+     */
+    isCacheExpired(videoUrl) {
+      const timestamp = localStorage.getItem(`cache-timestamp-${videoUrl}`);
+      if (!timestamp) return true; // No timestamp => treat as expired
+
+      const now = Date.now();
+      const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000; // 30 days in ms
+      return (now - Number(timestamp)) > THIRTY_DAYS;
+    },
+
+    /**
+     * Remove all ads older than 30 days from the cache.
+     */
+    async cleanExpiredCache() {
+      if (!('caches' in window)) return;
+
+      try {
+        const cache = await caches.open(this.cacheName);
+        const requests = await cache.keys();
+
+        for (const request of requests) {
+          const url = request.url;
+          if (this.isCacheExpired(url)) {
+            console.log('Removing expired cached ad:', url);
+            await cache.delete(request);
+            localStorage.removeItem(`cache-timestamp-${url}`);
+          }
+        }
+      } catch (err) {
+        console.error('Error cleaning expired cache:', err);
+      }
+    },
+
+    /**
+     * Enforce a maximum cache size of 2 GB.
+     * If over 2GB, remove oldest entries (based on timestamp) until under 2GB.
+     */
+    async enforceMaxCacheSize() {
+      if (!('caches' in window)) return;
+
+      try {
+        const MAX_CACHE_SIZE = 2 * 1024 * 1024 * 1024; // 2 GB in bytes
+        const cache = await caches.open(this.cacheName);
+        const requests = await cache.keys();
+
+        // Gather total size + timestamps
+        let totalSize = 0;
+        const entries = [];
+
+        for (const request of requests) {
+          const response = await cache.match(request);
+          if (!response) continue;
+
+          const blob = await response.blob();
+          const size = blob.size;
+          totalSize += size;
+
+          const url = request.url;
+          const timestampStr = localStorage.getItem(`cache-timestamp-${url}`);
+          const timestamp = timestampStr ? Number(timestampStr) : 0;
+
+          entries.push({ url, size, timestamp });
+        }
+
+        // If we're within limit, nothing to do
+        if (totalSize <= MAX_CACHE_SIZE) {
+          return;
+        }
+
+        console.warn(`Cache size (${(totalSize / (1024*1024)).toFixed(2)} MB) exceeds 2 GB. Cleaning up...`);
+
+        // Sort by oldest creation timestamp first
+        entries.sort((a, b) => a.timestamp - b.timestamp);
+
+        // Remove oldest until we're under 2 GB
+        let index = 0;
+        while (totalSize > MAX_CACHE_SIZE && index < entries.length) {
+          const entry = entries[index];
+          console.log('Removing to enforce 2GB limit:', entry.url);
+          await cache.delete(entry.url);
+          localStorage.removeItem(`cache-timestamp-${entry.url}`);
+          totalSize -= entry.size;
+          index++;
+        }
+
+        console.log(`Cache cleanup done. Current size: ${(totalSize / (1024*1024)).toFixed(2)} MB`);
+      } catch (err) {
+        console.error('Error enforcing max cache size:', err);
       }
     },
 
@@ -153,6 +280,7 @@ export default {
     prefetchNextAd() {
       if (this.isFetching) return;
       this.isFetching = true;
+
       this.fetchAd().then(url => {
         if (url) {
           this.nextAdUrl = url;
@@ -163,7 +291,7 @@ export default {
     },
 
     /**
-     * Play the advertisement video from the provided URL.
+     * Play the advertisement video from the provided URL (Blob or network).
      */
     playAd(url) {
       if (!url) return;
@@ -175,7 +303,8 @@ export default {
     },
 
     /**
-     * Handle video 'ended' event: Play the next ad or fetch a new one.
+     * Once the current video ends, play the next ad or fetch a new one,
+     * then clean up expired ads and enforce size limits.
      */
     onVideoEnded() {
       if (this.nextAdUrl) {
@@ -192,10 +321,15 @@ export default {
           }
         });
       }
+
+      // Clean up expired ads + enforce 2GB limit after each commercial
+      this.cleanExpiredCache()
+        .then(() => this.enforceMaxCacheSize())
+        .catch(err => console.error('Cleanup error after video ended:', err));
     },
 
     /**
-     * Once video metadata is loaded, request full screen.
+     * Once video metadata is loaded, attempt to request full screen.
      */
     onLoadedMetadata() {
       if (!document.fullscreenElement) {
@@ -220,7 +354,7 @@ export default {
     },
 
     /**
-     * Report focus state to the server.
+     * Report the focus state to the server.
      */
     reportFocus(isFocused) {
       const reportUrl = 'https://ds.manager.indigoingenium.ba/report_focus';
@@ -264,6 +398,7 @@ html, body {
   background-color: #f9f9f9;
   z-index: 9999;
 }
+
 .fullscreen-video {
   width: 100%;
   height: 100%;
