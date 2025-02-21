@@ -3,6 +3,7 @@
     <div class="container">
       <h1>Your UID Cookie</h1>
       <p class="uid">{{ uid }}</p>
+      <p class="status" v-if="!isOnline">🔴 No Internet Connection. Retrying...</p>
     </div>
   </div>
 </template>
@@ -16,7 +17,9 @@ export default {
   setup() {
     const router = useRouter();
     const uid = ref('');
+    const isOnline = ref(navigator.onLine);
     let checkRegistrationTimeout = null;
+    let offlineReloadInterval = null;
 
     const getCookie = (name) => {
       const nameEQ = name + "=";
@@ -28,19 +31,15 @@ export default {
       return null;
     };
 
-    const setCookie = (name, value, days) => {
-      let expires = "";
-      if (days) {
-        const date = new Date();
-        date.setTime(date.getTime() + days * 24 * 60 * 60 * 1000);
-        expires = "; expires=" + date.toUTCString();
-      }
+    const setCookie = (name, value) => {
       let domain = "";
       if (window.location.hostname.endsWith("indigoingenium.ba")) {
         domain = "; domain=.indigoingenium.ba";
       }
+      // Set expiration date far in the future (e.g., 100 years)
+      const expires = "; expires=Fri, 31 Dec 2123 23:59:59 GMT";
       document.cookie = name + "=" + (value || "") + expires + "; path=/" + domain;
-    };
+  };
 
     const generateUid = () => {
       const array = new Uint8Array(6);
@@ -59,6 +58,11 @@ export default {
     uid.value = cookieUid.toLowerCase();
 
     const checkRegistration = () => {
+      if (!isOnline.value) {
+        console.warn("Offline mode. Page will refresh every 5 seconds...");
+        return;
+      }
+
       const payload = { uuid: uid.value };
       console.log('Checking registration with payload:', payload);
 
@@ -78,21 +82,55 @@ export default {
         })
         .catch(error => {
           console.error('Error checking registration:', error);
-          checkRegistrationTimeout = setTimeout(checkRegistration, 3000);
+          if (isOnline.value) {
+            checkRegistrationTimeout = setTimeout(checkRegistration, 3000);
+          }
         });
     };
 
-    onMounted(() => {
+    const handleOnline = () => {
+      isOnline.value = true;
+      console.log("✅ Internet connection restored");
+      clearInterval(offlineReloadInterval); // Stop refreshing when back online
       checkRegistration();
-    });
+    };
 
-    onBeforeUnmount(() => {
+    const handleOffline = () => {
+      isOnline.value = false;
+      console.warn("❌ Lost internet connection");
       if (checkRegistrationTimeout) {
         clearTimeout(checkRegistrationTimeout);
       }
+      // Refresh page every 5 seconds when offline
+      offlineReloadInterval = setInterval(() => {
+        console.log("🔄 No connection. Reloading page...");
+        window.location.reload();
+      }, 10000);
+    };
+
+    onMounted(() => {
+      window.addEventListener('online', handleOnline);
+      window.addEventListener('offline', handleOffline);
+      checkRegistration();
+
+      // If page starts offline, trigger the reload interval
+      if (!navigator.onLine) {
+        handleOffline();
+      }
     });
 
-    return { uid };
+    onBeforeUnmount(() => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+      if (checkRegistrationTimeout) {
+        clearTimeout(checkRegistrationTimeout);
+      }
+      if (offlineReloadInterval) {
+        clearInterval(offlineReloadInterval);
+      }
+    });
+
+    return { uid, isOnline };
   }
 };
 </script>
@@ -138,6 +176,14 @@ h1 {
   padding: 12px;
   border-radius: 8px;
   border: 1px solid #0d47a1;
+}
+
+/* Internet Status */
+.status {
+  margin-top: 15px;
+  font-size: 1em;
+  color: #d32f2f; /* Red for offline */
+  font-weight: bold;
 }
 
 /* Smooth Fade In Animation */
