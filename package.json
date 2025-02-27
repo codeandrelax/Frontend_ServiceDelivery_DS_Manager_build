@@ -9,8 +9,19 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@fullcalendar/core": "^6.1.15",
+    "@fullcalendar/daygrid": "^6.1.15",
+    "@fullcalendar/interaction": "^6.1.15",
+    "@fullcalendar/timegrid": "^6.1.15",
+    "@fullcalendar/vue3": "^6.1.15",
+    "plyr": "^3.7.8",
+    "video.js": "^8.21.0",
+    "videojs-playlist": "^5.2.0",
     "vue": "^3.5.13",
-    "vue-router": "^4.5.0"
+    "vue-draggable-next": "^2.2.1",
+    "vue-plyr": "^7.0.0",
+    "vue-router": "^4.5.0",
+    "vue-video-player": "^5.0.2"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.2.1",

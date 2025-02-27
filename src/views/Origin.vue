@@ -44,13 +44,9 @@ export default {
     video.addEventListener('ended', this.onVideoEnded);
     video.addEventListener('loadedmetadata', this.onLoadedMetadata);
 
-    // 5️⃣ Focus reporting
-    window.addEventListener('focus', () => {
-      this.reportFocus(true);
-    });
-    window.addEventListener('blur', () => {
-      this.reportFocus(false);
-    });
+    // 5️⃣ Focus/blur event listeners (using named methods)
+    window.addEventListener('focus', this.onWindowFocus);
+    window.addEventListener('blur', this.onWindowBlur);
 
     // 6️⃣ If offline & video is not playing, refresh page every 10 seconds
     this.offlineRefreshInterval = setInterval(() => {
@@ -67,13 +63,9 @@ export default {
     video.removeEventListener('ended', this.onVideoEnded);
     video.removeEventListener('loadedmetadata', this.onLoadedMetadata);
 
-    // Remove focus/blur event listeners
-    window.removeEventListener('focus', () => {
-      this.reportFocus(true);
-    });
-    window.removeEventListener('blur', () => {
-      this.reportFocus(false);
-    });
+    // Remove focus/blur event listeners using the same named handlers
+    window.removeEventListener('focus', this.onWindowFocus);
+    window.removeEventListener('blur', this.onWindowBlur);
 
     // Clear the offline refresh interval
     if (this.offlineRefreshInterval) {
@@ -92,6 +84,20 @@ export default {
         if (c.indexOf(nameEQ) === 0) return c.substring(nameEQ.length);
       }
       return null;
+    },
+
+    /**
+     * Named handler for window 'focus' event.
+     */
+    onWindowFocus() {
+      this.reportFocus(true);
+    },
+
+    /**
+     * Named handler for window 'blur' event.
+     */
+    onWindowBlur() {
+      this.reportFocus(false);
     },
 
     /**
